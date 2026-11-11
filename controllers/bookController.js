@@ -1,5 +1,83 @@
+import mongoose from 'mongoose';
 import Author from '../models/Author.js';
 import Book from '../models/Book.js';
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const buildBookFilter = (query) => {
+  const filter = {};
+  const { genre, minPrice, maxPrice, author, search } = query;
+
+  if (genre) {
+    filter.genre = genre;
+  }
+
+  if (author) {
+    if (!isValidObjectId(author)) {
+      throw new Error('Author id is invalid.');
+    }
+    filter.author = author;
+  }
+
+  if (search) {
+    filter.title = { $regex: escapeRegex(search), $options: 'i' };
+  }
+
+  if (minPrice !== undefined || maxPrice !== undefined) {
+    filter.price = {};
+
+    if (minPrice !== undefined && minPrice !== '') {
+      const parsedMin = Number(minPrice);
+      if (Number.isNaN(parsedMin)) {
+        throw new Error('minPrice must be a valid number.');
+      }
+      filter.price.$gte = parsedMin;
+    }
+
+    if (maxPrice !== undefined && maxPrice !== '') {
+      const parsedMax = Number(maxPrice);
+      if (Number.isNaN(parsedMax)) {
+        throw new Error('maxPrice must be a valid number.');
+      }
+      filter.price.$lte = parsedMax;
+    }
+  }
+
+  return filter;
+};
+
+const buildSort = (query) => {
+  const { sort, order } = query;
+  const allowedSorts = ['price', 'title', 'publishedYear'];
+  const direction = order === 'asc' ? 1 : -1;
+
+  if (!sort || !allowedSorts.includes(sort)) {
+    return { createdAt: -1 };
+  }
+
+  return { [sort]: direction };
+};
+
+const validateBookValues = ({ price, publishedYear }) => {
+  const numericPrice = Number(price);
+  const numericYear = Number(publishedYear);
+
+  if (numericPrice <= 0) {
+    return { valid: false, status: 422, message: 'Price must be greater than zero.' };
+  }
+
+  if (numericYear < 1450 || numericYear > new Date().getFullYear()) {
+    return {
+      valid: false,
+      status: 422,
+      message: 'publishedYear must be between 1450 and the current year.',
+    };
+  }
+
+  return { valid: true };
+};
 
 export const createBook = async (req, res) => {
   try {
@@ -9,14 +87,38 @@ export const createBook = async (req, res) => {
       return res.status(400).json({ message: 'Title, genre, price, publishedYear and author are required.' });
     }
 
-    const authorExists = await Author.findById(author);
-    if (!authorExists) {
-      return res.status(400).json({ message: 'Author does not exist.' });
+    if (!isValidObjectId(author)) {
+      return res.status(400).json({ message: 'Author id is invalid.' });
     }
 
-    const book = await Book.create({ title, genre, price, publishedYear, author });
-    const populatedBook = await Book.findById(book._id).populate('author');
+    const existingAuthor = await Author.findById(author);
+    if (!existingAuthor) {
+      return res.status(400).json({ message: 'A book must belong to a real author.' });
+    }
 
+    const duplicateTitle = await Book.findOne({
+      author,
+      title: { $regex: `^${escapeRegex(title)}$`, $options: 'i' },
+    });
+
+    if (duplicateTitle) {
+      return res.status(409).json({ message: 'This author already has a book with the same title.' });
+    }
+
+    const validation = validateBookValues({ price, publishedYear });
+    if (!validation.valid) {
+      return res.status(validation.status).json({ message: validation.message });
+    }
+
+    const book = await Book.create({
+      title,
+      genre,
+      price: Number(price),
+      publishedYear: Number(publishedYear),
+      author,
+    });
+
+    const populatedBook = await Book.findById(book._id).populate('author');
     return res.status(201).json(populatedBook);
   } catch (error) {
     return res.status(500).json({ message: 'Failed to create book', error: error.message });
@@ -25,10 +127,26 @@ export const createBook = async (req, res) => {
 
 export const getAllBooks = async (req, res) => {
   try {
-    const books = await Book.find().populate('author').sort({ createdAt: -1 });
-    return res.status(200).json(books);
+    const filter = buildBookFilter(req.query);
+    const sortOptions = buildSort(req.query);
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+
+    const total = await Book.countDocuments(filter);
+    const books = await Book.find(filter)
+      .populate('author')
+      .sort(sortOptions)
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    return res.status(200).json({
+      page,
+      limit,
+      total,
+      results: books,
+    });
   } catch (error) {
-    return res.status(500).json({ message: 'Failed to fetch books', error: error.message });
+    return res.status(400).json({ message: error.message || 'Failed to fetch books' });
   }
 };
 
@@ -54,22 +172,42 @@ export const updateBook = async (req, res) => {
       return res.status(400).json({ message: 'Title, genre, price, publishedYear and author are required.' });
     }
 
-    const authorExists = await Author.findById(author);
-    if (!authorExists) {
-      return res.status(400).json({ message: 'Author does not exist.' });
+    if (!isValidObjectId(author)) {
+      return res.status(400).json({ message: 'Author id is invalid.' });
     }
 
-    const book = await Book.findByIdAndUpdate(
-      req.params.id,
-      { title, genre, price, publishedYear, author },
-      { new: true, runValidators: true }
-    ).populate('author');
+    const authorExists = await Author.findById(author);
+    if (!authorExists) {
+      return res.status(400).json({ message: 'A book must belong to a real author.' });
+    }
 
-    if (!book) {
+    const existingBook = await Book.findById(req.params.id);
+    if (!existingBook) {
       return res.status(404).json({ message: 'Book not found.' });
     }
 
-    return res.status(200).json(book);
+    const duplicateTitle = await Book.findOne({
+      author,
+      _id: { $ne: req.params.id },
+      title: { $regex: `^${escapeRegex(title)}$`, $options: 'i' },
+    });
+
+    if (duplicateTitle) {
+      return res.status(409).json({ message: 'This author already has a book with the same title.' });
+    }
+
+    const validation = validateBookValues({ price, publishedYear });
+    if (!validation.valid) {
+      return res.status(validation.status).json({ message: validation.message });
+    }
+
+    const updatedBook = await Book.findByIdAndUpdate(
+      req.params.id,
+      { title, genre, price: Number(price), publishedYear: Number(publishedYear), author },
+      { new: true, runValidators: true }
+    ).populate('author');
+
+    return res.status(200).json(updatedBook);
   } catch (error) {
     return res.status(500).json({ message: 'Failed to update book', error: error.message });
   }
