@@ -64,11 +64,11 @@ const validateBookValues = ({ price, publishedYear }) => {
   const numericPrice = Number(price);
   const numericYear = Number(publishedYear);
 
-  if (numericPrice <= 0) {
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
     return { valid: false, status: 422, message: 'Price must be greater than zero.' };
   }
 
-  if (numericYear < 1450 || numericYear > new Date().getFullYear()) {
+  if (!Number.isInteger(numericYear) || numericYear < 1450 || numericYear > new Date().getFullYear()) {
     return {
       valid: false,
       status: 422,

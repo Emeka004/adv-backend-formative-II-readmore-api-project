@@ -122,7 +122,8 @@ export const getAuthorStats = async (req, res) => {
     }
 
     const total = books.reduce((sum, book) => sum + Number(book.price), 0);
-    const averagePrice = Number((total / books.length).toFixed(2));
+    const average = total / books.length;
+    const averagePrice = Number((average + Number.EPSILON * Math.abs(average)).toFixed(2));
     const cheapestBook = books[0]?.title || null;
     const mostExpensiveBook = books[books.length - 1]?.title || null;
 

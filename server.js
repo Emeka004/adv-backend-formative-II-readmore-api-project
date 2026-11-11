@@ -1,6 +1,7 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { pathToFileURL } from 'node:url';
 import authorRoutes from './routes/authorRoutes.js';
 import bookRoutes from './routes/bookRoutes.js';
 
@@ -9,6 +10,8 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
+
+export { app };
 
 app.use(express.json());
 
@@ -19,7 +22,7 @@ app.get('/', (req, res) => {
 app.use('/authors', authorRoutes);
 app.use('/books', bookRoutes);
 
-const startServer = async () => {
+export const startServer = async () => {
   if (!MONGODB_URI) {
     console.error('Missing MONGODB_URI in .env');
     process.exit(1);
@@ -38,4 +41,6 @@ const startServer = async () => {
   }
 };
 
-startServer();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer();
+}
