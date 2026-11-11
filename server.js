@@ -1,6 +1,8 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import authorRoutes from './routes/authorRoutes.js';
+import bookRoutes from './routes/bookRoutes.js';
 
 dotenv.config();
 
@@ -13,6 +15,9 @@ app.use(express.json());
 app.get('/', (req, res) => {
   res.json({ message: 'ReadMore API is running' });
 });
+
+app.use('/authors', authorRoutes);
+app.use('/books', bookRoutes);
 
 const startServer = async () => {
   if (!MONGODB_URI) {
